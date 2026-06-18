@@ -1,0 +1,4 @@
+_target_: src.logger.cometml.CometMLWriter
+project_name: "lenless-offline"
+workspace: null
+mode: "offline"

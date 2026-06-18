@@ -1,0 +1,10 @@
+train:
+  _target_: src.datasets.DigiCamDataset
+  split: train
+  limit: null
+  instance_transforms: ${transforms.instance_transforms.train}
+test:
+  _target_: src.datasets.DigiCamDataset
+  split: test
+  limit: null
+  instance_transforms: ${transforms.instance_transforms.inference}
