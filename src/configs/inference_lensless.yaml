@@ -10,5 +10,5 @@ inferencer:
   device: auto
   save_path: "inference_output"
   seed: 42
-  from_pretrained: "saved/model_best.pth"
+  from_pretrained: "saved/modular_pre_post.pth"
   skip_model_load: False

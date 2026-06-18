@@ -34,9 +34,9 @@ class BaseTrainer:
         self.is_train = True
         self.config = config
         self.cfg_trainer = self.config.trainer
-
         self.device = device
         self.skip_oom = skip_oom
+
         self.logger = logger
         self.log_step = config.trainer.get("log_step", 50)
 
@@ -102,6 +102,7 @@ class BaseTrainer:
             *[m.name for m in self.metrics["inference"]],
             writer=self.writer,
         )
+
         # define checkpoint dir and init everything if required
 
         self.checkpoint_dir = (
@@ -221,12 +222,6 @@ class BaseTrainer:
         return logs
 
     def _evaluation_only(self):
-        """
-        Evaluate model without training (for models without learnable parameters).
-        
-        Returns:
-            logs (dict): logs that contain the information about evaluation.
-        """
         logs = {}
         for part, dataloader in self.evaluation_dataloaders.items():
             val_logs = self._evaluation_epoch(1, part, dataloader)
@@ -299,6 +294,20 @@ class BaseTrainer:
         return batch
 
     def transform_batch(self, batch):
+        """
+        Transforms elements in batch. Like instance transform inside the
+        BaseDataset class, but for the whole batch. Improves pipeline speed,
+        especially if used with a GPU.
+
+        Each tensor in a batch undergoes its own transform defined by the key.
+
+        Args:
+            batch (dict): dict-based batch containing the data from
+                the dataloader.
+        Returns:
+            batch (dict): dict-based batch containing the data from
+                the dataloader (possibly transformed via batch transform).
+        """
         # do batch transforms on device
         transform_type = "train" if self.is_train else "inference"
         transforms = self.batch_transforms.get(transform_type)
@@ -321,6 +330,14 @@ class BaseTrainer:
 
     @torch.no_grad()
     def _get_grad_norm(self, norm_type=2):
+        """
+        Calculates the gradient norm for logging.
+
+        Args:
+            norm_type (float | str | None): the order of the norm.
+        Returns:
+            total_norm (float): the calculated norm.
+        """
         parameters = self.model.parameters()
         if isinstance(parameters, torch.Tensor):
             parameters = [parameters]
@@ -332,6 +349,15 @@ class BaseTrainer:
         return total_norm.item()
 
     def _progress(self, batch_idx):
+        """
+        Calculates the percentage of processed batch within the epoch.
+
+        Args:
+            batch_idx (int): the current batch index.
+        Returns:
+            progress (str): contains current step and percentage
+                within the epoch.
+        """
         base = "[{}/{} ({:.0f}%)]"
         if hasattr(self.train_dataloader, "n_samples"):
             current = batch_idx * self.train_dataloader.batch_size
@@ -343,15 +369,44 @@ class BaseTrainer:
 
     @abstractmethod
     def _log_batch(self, batch_idx, batch, mode="train"):
+        """
+        Abstract method. Should be defined in the nested Trainer Class.
+
+        Log data from batch. Calls self.writer.add_* to log data
+        to the experiment tracker.
+
+        Args:
+            batch_idx (int): index of the current batch.
+            batch (dict): dict-based batch after going through
+                the 'process_batch' function.
+            mode (str): train or inference. Defines which logging
+                rules to apply.
+        """
         return NotImplementedError()
 
     def _log_scalars(self, metric_tracker: MetricTracker):
+        """
+        Wrapper around the writer 'add_scalar' to log all metrics.
+
+        Args:
+            metric_tracker (MetricTracker): calculated metrics.
+        """
         if self.writer is None:
             return
         for metric_name in metric_tracker.keys():
             self.writer.add_scalar(f"{metric_name}", metric_tracker.avg(metric_name))
 
     def _save_checkpoint(self, epoch, save_best=False, only_best=False):
+        """
+        Save the checkpoints.
+
+        Args:
+            epoch (int): current epoch number.
+            save_best (bool): if True, rename the saved checkpoint to 'model_best.pth'.
+            only_best (bool): if True and the checkpoint is the best, save it only as
+                'model_best.pth'(do not duplicate the checkpoint as
+                checkpoint-epochEpochNumber.pth)
+        """
         arch = type(self.model).__name__
         state = {
             "arch": arch,
@@ -376,9 +431,20 @@ class BaseTrainer:
             self.logger.info("Saving current best: model_best.pth ...")
 
     def _resume_checkpoint(self, resume_path):
+        """
+        Resume from a saved checkpoint (in case of server crash, etc.).
+        The function loads state dicts for everything, including model,
+        optimizers, etc.
+
+        Notice that the checkpoint should be located in the current experiment
+        saved directory (where all checkpoints are saved in '_save_checkpoint').
+
+        Args:
+            resume_path (str): Path to the checkpoint to be resumed.
+        """
         resume_path = str(resume_path)
         self.logger.info(f"Loading checkpoint: {resume_path} ...")
-        checkpoint = torch.load(resume_path, self.device)
+        checkpoint = torch.load(resume_path, map_location=self.device, weights_only=False)
         self.start_epoch = checkpoint["epoch"] + 1
         self.mnt_best = checkpoint["monitor_best"]
 
@@ -412,14 +478,24 @@ class BaseTrainer:
         )
 
     def _from_pretrained(self, pretrained_path):
+        """
+        Init model with weights from pretrained pth file.
+
+        Notice that 'pretrained_path' can be any path on the disk. It is not
+        necessary to locate it in the experiment saved dir. The function
+        initializes only the model.
+
+        Args:
+            pretrained_path (str): path to the model state dict.
+        """
         pretrained_path = str(pretrained_path)
         if hasattr(self, "logger"):  # to support both trainer and inferencer
             self.logger.info(f"Loading model weights from: {pretrained_path} ...")
         else:
             print(f"Loading model weights from: {pretrained_path} ...")
-        checkpoint = torch.load(pretrained_path, self.device)
+        checkpoint = torch.load(pretrained_path, map_location=self.device, weights_only=False)
 
         if checkpoint.get("state_dict") is not None:
-            self.model.load_state_dict(checkpoint["state_dict"])
+            self.model.load_state_dict(checkpoint["state_dict"], strict=False)
         else:
-            self.model.load_state_dict(checkpoint)
+            self.model.load_state_dict(checkpoint, strict=False)
